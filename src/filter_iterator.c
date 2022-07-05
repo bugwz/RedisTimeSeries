@@ -218,6 +218,7 @@ SeriesFilterValIterator *SeriesFilterValIterator_New(AbstractIterator *input,
     return newIter;
 }
 
+// 创建一个聚合的迭代器
 AggregationIterator *AggregationIterator_New(struct AbstractIterator *input,
                                              AggregationClass *aggregation,
                                              int64_t aggregationTimeDelta,
@@ -350,6 +351,8 @@ static void fillEmptyBuckets(Samples *samples,
     return;
 }
 
+// TODO: 处理聚合迭代的逻辑？？？
+// 聚合迭代器
 EnrichedChunk *AggregationIterator_GetNextChunk(struct AbstractIterator *iter) {
     AggregationIterator *self = (AggregationIterator *)iter;
     AggregationClass *aggregation = self->aggregation;

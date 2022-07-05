@@ -88,6 +88,8 @@ static void trimChunk(CompressedChunk *chunk) {
     }
 }
 
+// 将数据一分为2，一半的数据量
+// TODO: 啥时候会用到？？？
 Chunk_t *Compressed_SplitChunk(Chunk_t *chunk) {
     CompressedChunk *curChunk = chunk;
     size_t split = curChunk->count / 2;
@@ -118,6 +120,7 @@ Chunk_t *Compressed_SplitChunk(Chunk_t *chunk) {
     return newChunk2;
 }
 
+// 向上插入
 ChunkResult Compressed_UpsertSample(UpsertCtx *uCtx, int *size, DuplicatePolicy duplicatePolicy) {
     *size = 0;
     ChunkResult rv = CR_OK;
@@ -135,13 +138,16 @@ ChunkResult Compressed_UpsertSample(UpsertCtx *uCtx, int *size, DuplicatePolicy 
     Sample iterSample;
     for (; i < numSamples; ++i) {
         nextRes = Compressed_ChunkIteratorGetNext(iter, &iterSample);
+        // 将比ts的时间戳小的数据全部插入newChunk中
         if (iterSample.timestamp >= ts) {
             break;
         }
         ensureAddSample(newChunk, &iterSample);
     }
 
+    // 如果原始数据中存在相同的时间戳数据
     if (ts == iterSample.timestamp) {
+        // TODO: 没看懂是什么意思？
         ChunkResult cr = handleDuplicateSample(duplicatePolicy, iterSample, &uCtx->sample);
         if (cr != CR_OK) {
             Compressed_FreeChunkIterator(iter);
@@ -169,14 +175,17 @@ ChunkResult Compressed_UpsertSample(UpsertCtx *uCtx, int *size, DuplicatePolicy 
     return rv;
 }
 
+// 新增sample信息，时间戳+value
 ChunkResult Compressed_AddSample(Chunk_t *chunk, Sample *sample) {
     return Compressed_Append((CompressedChunk *)chunk, sample->timestamp, sample->value);
 }
 
+// 获取chunk中信息的个数
 u_int64_t Compressed_ChunkNumOfSample(Chunk_t *chunk) {
     return ((CompressedChunk *)chunk)->count;
 }
 
+// 获取第一个写入的时间戳
 timestamp_t Compressed_GetFirstTimestamp(Chunk_t *chunk) {
     if (((CompressedChunk *)chunk)->count ==
         0) { // When the chunk is empty it first TS is used for the chunk dict key
@@ -185,6 +194,7 @@ timestamp_t Compressed_GetFirstTimestamp(Chunk_t *chunk) {
     return ((CompressedChunk *)chunk)->baseTimestamp;
 }
 
+// 获取上次写入的时间戳
 timestamp_t Compressed_GetLastTimestamp(Chunk_t *chunk) {
     if (unlikely(((CompressedChunk *)chunk)->count == 0)) { // empty chunks are being removed
         RedisModule_Log(mr_staticCtx, "error", "Trying to get the last timestamp of empty chunk");
@@ -192,6 +202,7 @@ timestamp_t Compressed_GetLastTimestamp(Chunk_t *chunk) {
     return ((CompressedChunk *)chunk)->prevTimestamp;
 }
 
+// 获取上次写入的value
 double Compressed_GetLastValue(Chunk_t *chunk) {
     if (unlikely(((CompressedChunk *)chunk)->count == 0)) { // empty chunks are being removed
         RedisModule_Log(mr_staticCtx, "error", "Trying to get the last value of empty chunk");
@@ -199,6 +210,7 @@ double Compressed_GetLastValue(Chunk_t *chunk) {
     return ((CompressedChunk *)chunk)->prevValue.d;
 }
 
+// 返回一个chunk大小，参数是否计算结构体本身的大小
 size_t Compressed_GetChunkSize(Chunk_t *chunk, bool includeStruct) {
     CompressedChunk *cmpChunk = chunk;
     size_t size = cmpChunk->size * sizeof(char);
@@ -217,13 +229,18 @@ size_t Compressed_DelRange(Chunk_t *chunk, timestamp_t startTs, timestamp_t endT
     int numSamples = oldChunk->count; // sample size
     for (; i < numSamples; ++i) {
         Compressed_ChunkIteratorGetNext(iter, &iterSample);
+        // 删除指定范围的数据
         if (iterSample.timestamp >= startTs && iterSample.timestamp <= endTs) {
             // in delete range, skip adding to the new chunk
             deleted_count++;
             continue;
         }
+
+        // 相当于将范围外的数据添加到新增chunk中
         ensureAddSample(newChunk, &iterSample);
     }
+
+    // 使用新的chunk替换旧的chunk
     swapChunks(newChunk, oldChunk);
     Compressed_FreeChunkIterator(iter);
     Compressed_FreeChunk(newChunk);
@@ -436,6 +453,7 @@ void Compressed_FreeChunkIterator(ChunkIter_t *iter) {
     free(iter);
 }
 
+// TODO: 作用是什么？不知道？？？
 void Compressed_ProcessChunk(const Chunk_t *chunk,
                              uint64_t start,
                              uint64_t end,
@@ -447,8 +465,10 @@ void Compressed_ProcessChunk(const Chunk_t *chunk,
     const CompressedChunk *compressedChunk = chunk;
 
     if (unlikely(reverse)) {
+        // 反向解压chunk
         decompressChunkReverse(compressedChunk, start, end, enrichedChunk);
     } else {
+        // 解压chunk
         decompressChunk(compressedChunk, start, end, enrichedChunk);
     }
 

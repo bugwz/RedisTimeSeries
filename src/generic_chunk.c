@@ -7,6 +7,7 @@
 #include <math.h>
 #include "rmutil/alloc.h"
 
+// 不需要进行压缩的chunk
 static const ChunkFuncs regChunk = {
     .NewChunk = Uncompressed_NewChunk,
     .FreeChunk = Uncompressed_FreeChunk,
@@ -25,12 +26,14 @@ static const ChunkFuncs regChunk = {
     .GetLastValue = Uncompressed_GetLastValue,
     .GetFirstTimestamp = Uncompressed_GetFirstTimestamp,
 
+    // 一些序列化的操作，持久化rdb等
     .SaveToRDB = Uncompressed_SaveToRDB,
     .LoadFromRDB = Uncompressed_LoadFromRDB,
     .MRSerialize = Uncompressed_MRSerialize,
     .MRDeserialize = Uncompressed_MRDeserialize,
 };
 
+// 需要进行压缩的chunk
 static const ChunkFuncs comprChunk = {
     .NewChunk = Compressed_NewChunk,
     .FreeChunk = Compressed_FreeChunk,
@@ -38,7 +41,7 @@ static const ChunkFuncs comprChunk = {
     .SplitChunk = Compressed_SplitChunk,
 
     .AddSample = Compressed_AddSample,
-    .UpsertSample = Compressed_UpsertSample,
+    .UpsertSample = Compressed_UpsertSample, // 向上插入
     .DelRange = Compressed_DelRange,
 
     .ProcessChunk = Compressed_ProcessChunk,
@@ -49,6 +52,7 @@ static const ChunkFuncs comprChunk = {
     .GetLastValue = Compressed_GetLastValue,
     .GetFirstTimestamp = Compressed_GetFirstTimestamp,
 
+    // 序列化的一些方法
     .SaveToRDB = Compressed_SaveToRDB,
     .LoadFromRDB = Compressed_LoadFromRDB,
     .MRSerialize = Compressed_MRSerialize,

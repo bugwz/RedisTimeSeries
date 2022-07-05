@@ -150,6 +150,7 @@ static inline u_int64_t BIT(u_int64_t bit) {
 
 // Logic to check Least Significant Bit (LSB) of a number
 // Clear most significant bits from position `bits`
+// 检查数字的最低有效位（LSB）的逻辑从位置位清除最高有效位`
 static inline u_int64_t LSB(u_int64_t x, u_int64_t bits) {
     return x & bitmask[bits];
 }
@@ -158,6 +159,7 @@ static inline u_int64_t LSB(u_int64_t x, u_int64_t bits) {
  * int2bin and bin2int functions mirror each other.
  * int2bin is used to encode int64 into smaller representation to conserve space.
  * bin2int is used to decode input bits into an int64.
+ * // representation 表现
  * Example 1: int2bin(7, 10) = 7. Bit representation 0000000111
  *            bin2int(7, 10) = 7
  * Example 2: int2bin(-7, 10) = 1017. Bit representation 1111111001
@@ -173,20 +175,31 @@ static inline u_int64_t LSB(u_int64_t x, u_int64_t bits) {
  Thus the sign bit of a binary_t(10) is bit 9.
  */
 
+// binary_t 类型是已l位比特表示的2的补码整数,剩余有效位设置为0
+// 因此，一个int64的正数7可以表示为binary_t(10), 与（0-0000000 111） 相同
+// 而负整数 -7 将从1-11111111 001 转换为 0-011111001。
+
 // Converts `x`, an int64, to binary representation with length `l` bits
 // The commented out code is the full implementation, left for readability.
 // Final code is an optimization.
+// 注释掉的代码是完整的实现，留给读者阅读。最后的代码是一个优化。
+// TODO: 将int转为二进制？？？
+// int2bin 用于将unt64编码为较小的来节省空间
 static inline binary_t int2bin(int64_t x, u_int8_t l) {
     /*  binary_t bin = LSB(x, l - 1);
      *  if (x >= 0) return bin;
      *  binary_t sign = 1 << (l - 1);
      *  return bin | sign;*/
 
+    // bin = bin & ((1<<l) - 1)
+    // 249 = -7 & ((1<<8) - 1)
+    // 249 = -7 & 255
     binary_t bin = LSB(x, l);
     return bin;
 }
 
 // Converts `bin`, a binary of length `l` bits, into an int64
+// 用于解码比特成int64
 static int64_t bin2int(binary_t bin, u_int8_t l) {
     if (!(bin & BIT(l - 1)))
         return bin;
@@ -266,8 +279,10 @@ static ChunkResult appendInteger(CompressedChunk *chunk, timestamp_t timestamp) 
 #ifdef DEBUG
     assert(timestamp >= chunk->prevTimestamp);
 #endif
+    // 记录当前插入数据和上次插入数据的时间差值
     timestamp_t curDelta = timestamp - chunk->prevTimestamp;
 
+    // 比较当前的时间差值和上次的时间差值，最终获得的 doubleDelta.i 有可能为负数
     union64bits doubleDelta;
     doubleDelta.i = curDelta - chunk->prevTimestampDelta;
     /*
@@ -285,8 +300,12 @@ static ChunkResult appendInteger(CompressedChunk *chunk, timestamp_t timestamp) 
        * The second value is a compressed representation of the value with the `length`
          encoded by the first value. Compression is done using `int2bin`.
      */
+    // 当插入睡觉到chunk中的时候，我们需要确保chunk的大小足够，还会使用一个额外的bit来编码value
+    // TODO: 1个bit来编码value？如何做到的？
+    // 
     binary_t *bins = chunk->data;
     globalbit_t *bit = &chunk->idx;
+    // doubleDelta.i 等于 0，意味着当前最新的两次插入的每次之间的时间间隔一样，单位ms
     if (doubleDelta.i == 0) {
         CHECKSPACE(chunk, 1 + 1); // CHECKSPACE adds 1 as minimum for double space
         appendBits(bins, bit, 0x00, 1);
@@ -336,8 +355,8 @@ static ChunkResult appendFloat(CompressedChunk *chunk, double value) {
     }
     appendBits(bins, bit, 1, 1);
 
-    u_int64_t leading = LeadingZeros64(xorWithPrevious);
-    u_int64_t trailing = TrailingZeros64(xorWithPrevious);
+    u_int64_t leading = LeadingZeros64(xorWithPrevious); // TODO: 前导零
+    u_int64_t trailing = TrailingZeros64(xorWithPrevious); // TODO: 跟踪零？？？
 
     // Prevent over flow of DOUBLE_LEADING
     if (leading > 31)
@@ -363,6 +382,7 @@ static ChunkResult appendFloat(CompressedChunk *chunk, double value) {
      * Else, number of leading zeros in inserted followed by trailing zeros.
      * Then the value is the block is being appended.
      */
+    // TODO: 
     if (leading >= chunk->prevLeading && trailing >= chunk->prevTrailing &&
         expectedSize > prevBlockInfoSize) {
         CHECKSPACE(chunk, prevBlockInfoSize + 1);
@@ -394,6 +414,7 @@ ChunkResult Compressed_Append(CompressedChunk *chunk, timestamp_t timestamp, dou
         u_int64_t idx = chunk->idx;
         u_int64_t prevTimestamp = chunk->prevTimestamp;
         int64_t prevTimestampDelta = chunk->prevTimestampDelta;
+        // 插入时间戳和value
         if (appendInteger(chunk, timestamp) != CR_OK || appendFloat(chunk, value) != CR_OK) {
             chunk->idx = idx;
             chunk->prevTimestamp = prevTimestamp;

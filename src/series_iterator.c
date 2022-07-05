@@ -15,6 +15,7 @@ EnrichedChunk *SeriesIteratorGetNextChunk(AbstractIterator *iterator);
 void SeriesIteratorClose(AbstractIterator *iterator);
 
 // Initiates SeriesIterator, find the correct chunk and initiate a ChunkIterator
+// rev_chunk 代表着是否需要反转
 AbstractIterator *SeriesIterator_New(Series *series,
                                      timestamp_t start_ts,
                                      timestamp_t end_ts,

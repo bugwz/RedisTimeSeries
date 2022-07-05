@@ -32,8 +32,10 @@ void deleteReferenceToDeletedSeries(RedisModuleCtx *ctx, Series *series) {
     RedisModuleKey *_key;
     int status;
 
+    // 如果当前key存在源key，意味着当前key是一个压缩key
     if (series->srcKey) {
         status = GetSeries(ctx, series->srcKey, &_key, &_series, REDISMODULE_READ, false, true);
+        // 如果源key中有和当前key同名的映射关系，则应该取消掉当前的映射关系
         if (!status || (!GetRule(_series->rules, series->keyName))) {
             SeriesDeleteSrcRule(series, series->srcKey);
         }
@@ -44,6 +46,8 @@ void deleteReferenceToDeletedSeries(RedisModuleCtx *ctx, Series *series) {
 
     CompactionRule *rule = series->rules;
     while (rule) {
+        // 检查当前key对应的规则key信息
+        // 如果存在映射关系不匹配的情况，则将对应的映射关系取消掉
         CompactionRule *nextRule = rule->nextRule;
         status = GetSeries(ctx, rule->destKey, &_key, &_series, REDISMODULE_READ, false, true);
         if (!status || !_series->srcKey ||
@@ -78,6 +82,8 @@ int GetSeries(RedisModuleCtx *ctx,
     if (shouldDeleteRefs) {
         mode = mode | REDISMODULE_WRITE;
     }
+
+    // 存储series的时候，key是对应的时序的key，value是series结构
     RedisModuleKey *new_key = RedisModule_OpenKey(ctx, keyName, mode);
     if (RedisModule_KeyType(new_key) == REDISMODULE_KEYTYPE_EMPTY) {
         RedisModule_CloseKey(new_key);
@@ -121,6 +127,8 @@ int dictOperator(RedisModuleDict *d, void *chunk, timestamp_t ts, DictOp op) {
 Series *NewSeries(RedisModuleString *keyName, CreateCtx *cCtx) {
     Series *newSeries = (Series *)calloc(1, sizeof(Series));
     newSeries->keyName = keyName;
+    // 创建的chunks是一个rax的dict
+    // 其中key为时间戳，val为对应的时序格式的数据
     newSeries->chunks = RedisModule_CreateDict(NULL);
     newSeries->chunkSizeBytes = cCtx->chunkSizeBytes;
     newSeries->retentionTime = cCtx->retentionTime;
@@ -160,26 +168,38 @@ void SeriesTrim(Series *series, timestamp_t startTs, timestamp_t endTs) {
     }
 
     // start iterator from smallest key
+    // 从最小的key开始迭代，chunks 是一个dict
     RedisModuleDictIter *iter = RedisModule_DictIteratorStartC(series->chunks, "^", NULL, 0);
 
     Chunk_t *currentChunk;
     void *currentKey;
     size_t keyLen;
+    // 计算一个最小的时间戳
+    // TODO: 这里的 series->retentionTime 应该是一个时间差的值，
+    // 仿佛是代表着要保留的时间的范围，而不是一个具体的时间点
+    // 那么 minTimestamp 就代表着最小的时间点
     timestamp_t minTimestamp = series->lastTimestamp > series->retentionTime
                                    ? series->lastTimestamp - series->retentionTime
                                    : 0;
 
     const ChunkFuncs *funcs = series->funcs;
     while ((currentKey = RedisModule_DictNextC(iter, &keyLen, (void *)&currentChunk))) {
+        // 在遍历的过程中如果发现时间戳大于等于 minTimestamp ，则退出
         if (funcs->GetLastTimestamp(currentChunk) >= minTimestamp) {
             break;
         }
 
+        // 如果当前的时间戳较小，我们需要删除对应的key
         RedisModule_DictDelC(series->chunks, currentKey, keyLen, NULL);
         // reseek iterator since we modified the dict,
         // go to first element that is bigger than current key
+        // 重新设置迭代器，因为我们修改了dict
+        // 转到大于当前键的第一个元素
         RedisModule_DictIteratorReseekC(iter, ">", currentKey, keyLen);
 
+        // 删除掉对应key的数量
+        // TODO: 为什么不是删除1，而是需要获取一下当前chunk的key的数量？？？
+        // TODO: dcit中存储的是一个一个的chunk？每个chunk中可能有很多key？
         series->totalSamples -= funcs->GetNumOfSample(currentChunk);
         funcs->FreeChunk(currentChunk);
     }
@@ -665,13 +685,22 @@ int SeriesUpsertSample(Series *series,
 
 int SeriesAddSample(Series *series, api_timestamp_t timestamp, double value) {
     // backfilling or update
+    // 回填或者更新
+    // 每一个数据样本就包含两部分，时间戳（longlong）和value（double类型）
     Sample sample = { .timestamp = timestamp, .value = value };
     ChunkResult ret = series->funcs->AddSample(series->lastChunk, &sample);
 
+    // 如果 ret 等于 CR_END ，意味着 chunk 中已经没有空间来存储对应的时间戳和value了
+    // 因此我们需要创建一个新的chunk
     if (ret == CR_END) {
         // When a new chunk is created trim the series
+        // 当一个新的chunk被创建
+        // 裁剪现有的chunk，chunk中可能有一个已经过期的key需要被删除
         SeriesTrim(series, 0, 0);
 
+        // 创建新的chunk，并将其加入到chunks的dict中
+        // 需要注意的是，在dict中key是时间戳，value是新创建的chunk
+        // TODO: 每一个时间戳一个chunk 还是一个 chunk 中可能包含多个时间戳的数据？？？
         Chunk_t *newChunk = series->funcs->NewChunk(series->chunkSizeBytes);
         dictOperator(series->chunks, newChunk, timestamp, DICT_OP_SET);
         ret = series->funcs->AddSample(newChunk, &sample);
@@ -1024,6 +1053,7 @@ CompactionRule *NewRule(RedisModuleString *destKey,
     }
 
     CompactionRule *rule = (CompactionRule *)malloc(sizeof(CompactionRule));
+    // 获取对应聚合类型的实现
     rule->aggClass = GetAggClass(aggType);
     rule->aggType = aggType;
     rule->aggContext = rule->aggClass->createContext(false);
@@ -1177,13 +1207,18 @@ timestamp_t getFirstValidTimestamp(Series *series, long long *skipped) {
     return sample.timestamp;
 }
 
+// 正序查询的时候，其中check_retention是true
 AbstractIterator *SeriesQuery(Series *series,
                               const RangeArgs *args,
                               bool reverse,
                               bool check_retention) {
     // In case a retention is set shouldn't return chunks older than the retention
+    // 如果设置了保留，则不应返回早于保留的块
     timestamp_t startTimestamp = args->startTimestamp;
     if (check_retention && series->retentionTime > 0) {
+        // series->lastTimestamp - series->retentionTime 就是要保留的最老的时间数据
+        // 第一种情况，要保留的时间数据在start和last范围内，那么start就挪到要保留的最老的时间点上
+        // 第二种情况，要保留的时间数据超出了start和last的范围，但是由于当前最老的就是start，那就从start开始
         startTimestamp =
             series->lastTimestamp > series->retentionTime
                 ? max(args->startTimestamp, series->lastTimestamp - series->retentionTime)
@@ -1193,7 +1228,10 @@ AbstractIterator *SeriesQuery(Series *series,
     // When there is a TS filter because we wanted the logic to be one for both reverse and non
     // reverse chunk, if the requested range should be reverse, we reverse it after the filter, and
     // should_reverse_chunk point it out.
+    // 当我们希望反向块和非反向块的逻辑都是一个TS过滤器时，
+    // 如果请求的范围应该是反向的，我们在过滤器之后反转它，并且应该指出它。
     bool should_reverse_chunk = reverse && (!args->filterByTSArgs.hasValue);
+    // 解析来要遍历所有的chunk了
     AbstractIterator *chain = SeriesIterator_New(
         series, startTimestamp, args->endTimestamp, reverse, should_reverse_chunk);
 
@@ -1206,10 +1244,14 @@ AbstractIterator *SeriesQuery(Series *series,
         chain = (AbstractIterator *)SeriesFilterValIterator_New(chain, args->filterByValueArgs);
     }
 
+    // 时间对齐方式
+    // TODO: 时间对齐与传入的时间参数进行对齐的目的是？？？
+    // TODO: 还会与传入的时间的参数进行对齐？？？
     timestamp_t timestampAlignment;
     switch (args->alignment) {
         case StartAlignment:
             // args-startTimestamp can hold an older timestamp than what we currently have or just 0
+            //  args-startTimestamp 可以保存比当前时间戳旧的时间戳，或仅0
             timestampAlignment = args->startTimestamp;
             break;
         case EndAlignment:
@@ -1219,10 +1261,11 @@ AbstractIterator *SeriesQuery(Series *series,
             timestampAlignment = args->timestampAlignment;
             break;
         default:
-            timestampAlignment = 0;
+            timestampAlignment = 0; // TODO: 不进行时间对齐？？？
             break;
     }
 
+    // 聚合类的数据
     if (args->aggregationArgs.aggregationClass != NULL) {
         chain = (AbstractIterator *)AggregationIterator_New(chain,
                                                             args->aggregationArgs.aggregationClass,

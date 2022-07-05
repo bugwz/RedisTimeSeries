@@ -27,17 +27,17 @@ typedef union
 
 typedef struct CompressedChunk
 {
-    u_int64_t size;
-    u_int64_t count;
-    u_int64_t idx;
+    u_int64_t size; // chunk的总大小
+    u_int64_t count; // 内部包含的样本的数量，创建chunk之后，插入第一个样本的时候count为0
+    u_int64_t idx; // 代表当前数据已经插入的哪个位置了，size - idx 意味着还剩余多大的空间可用于存储数据
 
-    union64bits baseValue;
-    u_int64_t baseTimestamp;
+    union64bits baseValue; // 插入的第一个样本的value
+    u_int64_t baseTimestamp; // 插入的第一个样本的时间戳
 
-    u_int64_t *data;
+    u_int64_t *data; // 最终记录数据的数据集？？？
 
-    u_int64_t prevTimestamp;
-    int64_t prevTimestampDelta;
+    u_int64_t prevTimestamp; // 上一次插入数据的时间戳
+    int64_t prevTimestampDelta; // ？？？
 
     union64bits prevValue;
     u_int8_t prevLeading;

@@ -26,6 +26,7 @@ typedef enum
 } INDEXER_OPERATION_T;
 
 void IndexInit() {
+    // labelsIndex 和 tsLabelIndex 都是一个raxTree
     labelsIndex = RedisModule_CreateDict(NULL);
     tsLabelIndex = RedisModule_CreateDict(NULL);
 }
@@ -171,13 +172,22 @@ void labelIndexUnderKey(INDEXER_OPERATION_T op,
 void IndexMetric(RedisModuleString *ts_key, Label *labels, size_t labels_count) {
     const char *key_string, *value_string;
     for (int i = 0; i < labels_count; i++) {
-        size_t _s;
+        size_t _s; // 代表着kv的字符串长度
         key_string = RedisModule_StringPtrLen(labels[i].key, &_s);
         value_string = RedisModule_StringPtrLen(labels[i].value, &_s);
+        // 索引的kv格式为： "__index_%s=%s", k, v
         RedisModuleString *indexed_key_value =
             RedisModule_CreateStringPrintf(NULL, KV_PREFIX, key_string, value_string);
+
+        // 索引的k的格式为："__key_index_%s", k
         RedisModuleString *indexed_key = RedisModule_CreateStringPrintf(NULL, K_PREFIX, key_string);
 
+        // labelsIndex 是一个全局的索引dict（raxTree），里面内存的格式如下：
+        //      key: "__index_%s=%s"
+        //      val: 又是一个rax树
+        // tsLabelIndex 是一个全局的索引dict（raxTree），里面内存的格式如下：
+        //      key: "__key_index_%s"
+        //      val: 一个rax树
         labelIndexUnderKey(Indexer_Add, indexed_key_value, ts_key, labelsIndex, tsLabelIndex);
         labelIndexUnderKey(Indexer_Add, indexed_key, ts_key, labelsIndex, tsLabelIndex);
 
@@ -310,6 +320,7 @@ RedisModuleDict *GetPredicateKeysDict(RedisModuleCtx *ctx,
     int nokey;
 
     if (predicate->type == NCONTAINS || predicate->type == CONTAINS) {
+        // 索引key，前缀为 __key_index_
         index_key = RedisModule_CreateStringPrintf(
             ctx, K_PREFIX, RedisModule_StringPtrLen(predicate->key, &_s));
         currentLeaf = RedisModule_DictGet(labelsIndex, index_key, &nokey);
@@ -404,6 +415,8 @@ void PromoteSmallestPredicateToFront(RedisModuleCtx *ctx,
      * beginning of the predicate list so we will start our calculation from the smallest predicate.
      * This is an optimization, so we will copy the smallest dict possible.
      */
+    // 找到具有与之匹配的最少键数的谓词，并将其移动到谓词列表的开头，
+    // 这样我们将从最小的谓词开始计算。这是一个优化，因此我们将复制尽可能小的dict。
     if (predicate_count > 1) {
         int minIndex = 0;
         unsigned int minDictSize = UINT_MAX;
@@ -439,6 +452,7 @@ RedisModuleDict *QueryIndex(RedisModuleCtx *ctx,
     PromoteSmallestPredicateToFront(ctx, index_predicate, predicate_count);
 
     // EQ or Contains
+    // 等于或者包含
     for (int i = 0; i < predicate_count; i++) {
         if (index_predicate[i].type == EQ || index_predicate[i].type == CONTAINS ||
             index_predicate[i].type == LIST_MATCH) {
@@ -451,6 +465,7 @@ RedisModuleDict *QueryIndex(RedisModuleCtx *ctx,
 
     // The next two types of queries are reducers so we run them after the matcher
     // NCONTAINS or NEQ
+    // 不包含或者不等于
     for (int i = 0; i < predicate_count; i++) {
         if (index_predicate[i].type == NCONTAINS || index_predicate[i].type == NEQ ||
             index_predicate[i].type == LIST_NOTMATCH) {
@@ -465,6 +480,8 @@ RedisModuleDict *QueryIndex(RedisModuleCtx *ctx,
         return RedisModule_CreateDict(ctx);
     }
 
+    // 集群的场景下又可能会出发数据迁移，因此存储的一些特征key可能会被迁移走
+    // 这种情况下应该将迭代到的不符合
     if (unlikely(isTrimming)) {
         RedisModuleDictIter *iter = RedisModule_DictIteratorStartC(result, "^", NULL, 0);
         RedisModuleString *currentKey;
@@ -472,6 +489,7 @@ RedisModuleDict *QueryIndex(RedisModuleCtx *ctx,
         RedisModule_ShardingGetSlotRange(&firstSlot, &lastSlot);
         while ((currentKey = RedisModule_DictNext(NULL, iter, NULL)) != NULL) {
             slot = RedisModule_ShardingGetKeySlot(currentKey);
+            // 表示当前key的slot不在本实例中，因此我们需要释放掉指定key
             if (firstSlot > slot || lastSlot < slot) {
                 RedisModule_DictDel(result, currentKey, NULL);
                 RedisModule_DictIteratorReseek(iter, ">", currentKey);

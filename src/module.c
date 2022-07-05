@@ -150,7 +150,9 @@ int TSDB_info(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     return REDISMODULE_OK;
 }
 
+// 查询二级索引
 void _TSDB_queryindex_impl(RedisModuleCtx *ctx, QueryPredicateList *queries) {
+    // 查询出的二级索引是一个dict，这个dict是一个rax结构
     RedisModuleDict *result = QueryIndex(ctx, queries->list, queries->count);
 
     RedisModule_ReplyWithArray(ctx, REDISMODULE_POSTPONED_ARRAY_LEN);
@@ -159,6 +161,7 @@ void _TSDB_queryindex_impl(RedisModuleCtx *ctx, QueryPredicateList *queries) {
     char *currentKey;
     size_t currentKeyLen;
     long long replylen = 0;
+    // 遍历dict，获取符合条件的索引
     while ((currentKey = RedisModule_DictNextC(iter, &currentKeyLen, NULL)) != NULL) {
         RedisModule_ReplyWithStringBuffer(ctx, currentKey, currentKeyLen);
         replylen++;
@@ -167,6 +170,7 @@ void _TSDB_queryindex_impl(RedisModuleCtx *ctx, QueryPredicateList *queries) {
     RedisModule_ReplySetArrayLength(ctx, replylen);
 }
 
+// 在 Redis 集群上运行时，QUERYINDEX 命令不能作为事务的一部分。
 int TSDB_queryindex(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     RedisModule_AutoMemory(ctx);
 
@@ -183,6 +187,7 @@ int TSDB_queryindex(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
         return RTS_ReplyGeneralError(ctx, "TSDB: failed parsing labels");
     }
 
+    // 无论何时需要提供过滤器，都必须应用至少一个标签=值过滤器
     if (CountPredicateType(queries, EQ) + CountPredicateType(queries, LIST_MATCH) == 0) {
         QueryPredicateList_Free(queries);
         return RTS_ReplyGeneralError(ctx, "TSDB: please provide at least one matcher");
@@ -373,11 +378,13 @@ int TSDB_mrevrange(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     return TSDB_generic_mrange(ctx, argv, argc, true);
 }
 
+// 是否逆序的标记 rev 为false
 int TSDB_generic_range(RedisModuleCtx *ctx, RedisModuleString **argv, int argc, bool rev) {
     if (argc < 4) {
         return RedisModule_WrongArity(ctx);
     }
 
+    // 获取源key的信息
     Series *series;
     RedisModuleKey *key;
     const int status = GetSeries(ctx, argv[1], &key, &series, REDISMODULE_READ, false, false);
@@ -385,6 +392,7 @@ int TSDB_generic_range(RedisModuleCtx *ctx, RedisModuleString **argv, int argc, 
         return REDISMODULE_ERR;
     }
 
+    // 解析相关的参数
     RangeArgs rangeArgs = { 0 };
     if (parseRangeArguments(ctx, 2, argv, argc, series->lastTimestamp, &rangeArgs) !=
         REDISMODULE_OK) {
@@ -398,6 +406,7 @@ _out:
     return REDISMODULE_OK;
 }
 
+// ts.range命令
 int TSDB_range(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     return TSDB_generic_range(ctx, argv, argc, false);
 }
@@ -411,14 +420,21 @@ static void handleCompaction(RedisModuleCtx *ctx,
                              CompactionRule *rule,
                              api_timestamp_t timestamp,
                              double value) {
+
+    // TODO: currentTimestamp 这个时间戳代表着什么呢？？？
     timestamp_t currentTimestamp =
         CalcBucketStart(timestamp, rule->bucketDuration, rule->timestampAlignment);
+    // 按照 CalcBucketStart 函数内部的假设情况分析，currentTimestampNormalized 为 80
     timestamp_t currentTimestampNormalized = BucketStartNormalize(currentTimestamp);
 
+    // 如果该值为-1，代表着创建rule之后还没有执行插入数据的操作
     if (rule->startCurrentTimeBucket == -1LL) {
         // first sample, lets init the startCurrentTimeBucket
+        // 第一个示例，让我们初始化startCurrentTimeBucket
+        // 第一次插入操作，在上面假设的情况下，也就是说将80赋值给它
         rule->startCurrentTimeBucket = currentTimestampNormalized;
 
+        // 只有使用twa（时间加权平均值）的情况下 addBucketParams 才不为NULL
         if (rule->aggClass->addBucketParams) {
             rule->aggClass->addBucketParams(rule->aggContext,
                                             currentTimestampNormalized,
@@ -426,9 +442,12 @@ static void handleCompaction(RedisModuleCtx *ctx,
         }
     }
 
+    // 在后续处理插入的情况下，只有当插入的时间序列较大时，才会执行下面逻辑
+    // 实际上只有当新插入的时间与上次时间的差，超过了rule->bucketDuration才会进入到下面的逻辑
     if (currentTimestampNormalized > rule->startCurrentTimeBucket) {
         Series *destSeries;
         RedisModuleKey *key;
+        // 获取对应的压缩key，压缩key中存储了对应的聚合数据
         int status = GetSeries(ctx,
                                rule->destKey,
                                &key,
@@ -438,36 +457,53 @@ static void handleCompaction(RedisModuleCtx *ctx,
                                true);
         if (!status) {
             // key doesn't exist anymore and we don't do anything
+            // 目标key不存在的时候什么都不能做
             return;
         }
 
+        // 只有是权重平均数的时候才会执行到这里
         if (rule->aggClass->addNextBucketFirstSample) {
             rule->aggClass->addNextBucketFirstSample(rule->aggContext, value, timestamp);
         }
 
+        // 获取聚合chunk中的val数据
         double aggVal;
         rule->aggClass->finalize(rule->aggContext, &aggVal);
+        // 并将其加入的对应时间戳的val中
         SeriesAddSample(destSeries, rule->startCurrentTimeBucket, aggVal);
+        // TODO: ts.add:dest的执行逻辑是？？？
         RedisModule_NotifyKeyspaceEvent(
             ctx, REDISMODULE_NOTIFY_MODULE, "ts.add:dest", rule->destKey);
         Sample last_sample;
+
+        // 只有时间权重平均数的聚合规则才会走到这里
         if (rule->aggClass->addPrevBucketLastSample) {
             rule->aggClass->getLastSample(rule->aggContext, &last_sample);
         }
+
+        // 需要重置聚合数据，以便于统计下一次的聚合数据
         rule->aggClass->resetContext(rule->aggContext);
+
+        // 只有时间加权平均数的时候才会执行下面的逻辑，其他的聚合逻辑没有对应的执行函数
         if (rule->aggClass->addBucketParams) {
             rule->aggClass->addBucketParams(rule->aggContext,
                                             currentTimestampNormalized,
                                             currentTimestamp + rule->bucketDuration);
         }
 
+        // 只有时间加权平均数的时候才会执行下面的逻辑，其他的聚合逻辑没有对应的执行函数
         if (rule->aggClass->addPrevBucketLastSample) {
             rule->aggClass->addPrevBucketLastSample(
                 rule->aggContext, last_sample.value, last_sample.timestamp);
         }
+
+        // 需要更新当前的时间戳，以便进入下一次的聚合统计
         rule->startCurrentTimeBucket = currentTimestampNormalized;
         RedisModule_CloseKey(key);
     }
+
+    // 再执行聚合数据之前，我们需要记录一下按照对应聚合规则的数据的结果
+    // 以便于在聚合操作的操作的时候直接获取对应聚合值
     rule->aggClass->appendValue(rule->aggContext, value, timestamp);
 }
 
@@ -479,12 +515,16 @@ static int internalAdd(RedisModuleCtx *ctx,
     timestamp_t lastTS = series->lastTimestamp;
     uint64_t retention = series->retentionTime;
     // ensure inside retention period.
+    // TODO: 确保在保留期内
+    // 保留时间约束，上次更新时间约束
     if (retention && timestamp < lastTS && retention < lastTS - timestamp) {
         RTS_ReplyGeneralError(ctx, "TSDB: Timestamp is older than retention");
         return REDISMODULE_ERR;
     }
 
+    // 如果是乱序的样本，新样本的时间戳小于等于上次的时间戳，并且？？？
     if (timestamp <= series->lastTimestamp && series->totalSamples != 0) {
+        // 乱序的样本在block模式下会发生错误
         if (SeriesUpsertSample(series, timestamp, value, dp_override) != REDISMODULE_OK) {
             RTS_ReplyGeneralError(ctx,
                                   "TSDB: Error at upsert, update is not supported when "
@@ -492,14 +532,18 @@ static int internalAdd(RedisModuleCtx *ctx,
             return REDISMODULE_ERR;
         }
     } else {
+        // 将对应的时间戳和value添加到时序数据中
         if (SeriesAddSample(series, timestamp, value) != REDISMODULE_OK) {
             RTS_ReplyGeneralError(ctx, "TSDB: Error at add");
             return REDISMODULE_ERR;
         }
         // handle compaction rules
+        // 处理压缩规则，删除没有引用的规则
         if (series->rules) {
             deleteReferenceToDeletedSeries(ctx, series);
         }
+
+        // 遍历所有的规则，有可能需要针对不同的规则做一些处理，压缩规则
         CompactionRule *rule = series->rules;
         while (rule != NULL) {
             handleCompaction(ctx, series, rule, timestamp, value);
@@ -642,6 +686,7 @@ int CreateTsKey(RedisModuleCtx *ctx,
         return TSDB_ERROR;
     }
 
+    // 索引key的信息，创建时序key的时候就会创建
     IndexMetric(keyName, (*series)->labels, (*series)->labelsCount);
 
     return TSDB_OK;
@@ -785,6 +830,9 @@ int TSDB_deleteRule(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
 /*
 TS.CREATERULE sourceKey destKey AGGREGATION aggregationType bucketDuration
 */
+// aggregationType 为聚合器类型
+// 为 sourceKey 创建一个压缩规则，压缩后的数据存储在 destKey 中？？？
+// 创建压缩规则
 int TSDB_createRule(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     RedisModule_AutoMemory(ctx);
 
@@ -793,9 +841,11 @@ int TSDB_createRule(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     }
 
     // Validate aggregation arguments
+    // 验证聚合的相关参数
     api_timestamp_t bucketDuration;
     int aggType;
     timestamp_t alignmentTS;
+    // 最终获取到bucketDuration ， aggType 和 alignmentTS
     const int result =
         _parseAggregationArgs(ctx, argv, argc, &bucketDuration, &aggType, NULL, NULL, &alignmentTS);
     if (result == TSDB_NOTEXISTS) {
@@ -805,6 +855,7 @@ int TSDB_createRule(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
         return REDISMODULE_ERR;
     }
 
+    // 源key和目标key不能相等
     RedisModuleString *srcKeyName = argv[1];
     RedisModuleString *destKeyName = argv[2];
     if (!RedisModule_StringCompare(srcKeyName, destKeyName)) {
@@ -821,6 +872,7 @@ int TSDB_createRule(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     }
 
     // 1. Verify the source is not a destination
+    // 1. 验证源key的不是一种压缩key，只有压缩类型的key的src才不是NULL
     if (srcSeries->srcKey) {
         RedisModule_CloseKey(srcKey);
         return RTS_ReplyGeneralError(ctx, "TSDB: the source key already has a source rule");
@@ -836,6 +888,7 @@ int TSDB_createRule(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     }
 
     // 2. verify dst is not s source
+    // 2. 验证目标key没有一个规则，只有源key才有对应的压缩key，并且压缩key是没有规则的
     if (destSeries->rules) {
         RedisModule_CloseKey(srcKey);
         RedisModule_CloseKey(destKey);
@@ -844,6 +897,8 @@ int TSDB_createRule(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
 
     // 3. verify dst doesn't already have src,
     // 4. This covers also the scenario when the rule is already exists
+    // 3. 验证目标key的srcKey不存在，确保目标key之前没有关联的源key，也就是说目标key此时还是一个空的key
+    // 4. 这也涵盖了规则已经存在的场景，确保目标key之前不是其他key的压缩（规则）key
     if (destSeries->srcKey) {
         RedisModule_CloseKey(srcKey);
         RedisModule_CloseKey(destKey);
@@ -851,9 +906,11 @@ int TSDB_createRule(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     }
 
     // add src to dest
+    // 将目标key中的src的名字设置为源key的名字，通过这种方式将源key和压缩key关联了起来
     SeriesSetSrcRule(ctx, destSeries, srcSeries->keyName);
 
     // Last add the rule to source
+    // 创建一个规则，并将这个规则加入到源key的规则列表中
     if (SeriesAddRule(ctx, srcSeries, destSeries, aggType, bucketDuration, alignmentTS) == NULL) {
         RedisModule_CloseKey(srcKey);
         RedisModule_CloseKey(destKey);

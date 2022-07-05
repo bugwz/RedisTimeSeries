@@ -34,11 +34,13 @@ int ReplySeriesArrayPos(RedisModuleCtx *ctx,
     return REDISMODULE_OK;
 }
 
+// 返回对应的key的范围信息，reverse 参数代表着是否要进行逆序处理
 int ReplySeriesRange(RedisModuleCtx *ctx, Series *series, const RangeArgs *args, bool reverse) {
     long long arraylen = 0;
     long long _count = LLONG_MAX;
     unsigned int n;
     if (args->count != -1) {
+        // _count 是客户端期望接受的样本的最大数量
         _count = args->count;
     }
 
@@ -47,6 +49,7 @@ int ReplySeriesRange(RedisModuleCtx *ctx, Series *series, const RangeArgs *args,
     RedisModule_ReplyWithArray(ctx, REDISMODULE_POSTPONED_ARRAY_LEN);
 
     while ((arraylen < _count) && (enrichedChunk = iter->GetNext(iter))) {
+        // 统计样本的数量并输出
         n = (unsigned int)min(_count - arraylen, enrichedChunk->samples.num_samples);
         for (size_t i = 0; i < n; ++i) {
             ReplyWithSample(

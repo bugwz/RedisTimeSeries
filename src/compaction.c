@@ -132,15 +132,17 @@ void AvgAddValue(void *contextPtr, double value, __attribute__((unused)) timesta
     AvgContext *context = (AvgContext *)contextPtr;
     context->cnt++;
 
-    // Test for overflow
+    // Test for overflow 检查是否溢出了
+    // unlikely 不大可能发生的
     if (unlikely(((context->val < 0.0) == (value < 0.0) &&
                   (fabs(context->val) > (DBL_MAX - fabs(value)))) ||
                  context->isOverflow)) {
         // calculating: avg(t+1) = t*avg(t)/(t+1) + val/(t+1)
+        // 计算平均值
 
         long double ld_val = context->val;
         long double ld_value = value;
-        if (likely(hasLongDouble)) { // better accuracy
+        if (likely(hasLongDouble)) { // better accuracy 更高的准确性
             ld_val /= context->cnt;
             if (context->isOverflow) {
                 ld_val *= (long double)(context->cnt - 1);
@@ -156,16 +158,21 @@ void AvgAddValue(void *contextPtr, double value, __attribute__((unused)) timesta
         context->val = ld_val;
         context->isOverflow = true;
     } else { // No Overflow
+        // 没有溢出之前直接加所有的数据，这样是一个精确的数据
+        // 如果发生了溢出，则无法实现精确的计算，会使用一个平均值
         context->val += value;
     }
 }
 
+// 最终确认
 void AvgFinalize(void *contextPtr, double *value) {
     AvgContext *context = (AvgContext *)contextPtr;
     assert(context->cnt > 0);
     if (unlikely(context->isOverflow)) {
+        // 如果发生了溢出，那对应的val就是平均值
         *value = context->val;
     } else {
+        // 如果没有发生溢出，那么val除以数量就是一个平均值
         *value = context->val / context->cnt;
     }
 }
@@ -243,6 +250,7 @@ void TwaAddPrevBucketLastSample(void *contextPtr, double value, timestamp_t ts) 
     wcontext->weightData.is_first_bucket = false;
 }
 
+// 权重平均数
 void TwaAddValue(void *contextPtr, double value, timestamp_t ts) {
     TwaContext *wcontext = (TwaContext *)contextPtr;
     AvgContext *context = &wcontext->avgContext;
@@ -690,6 +698,7 @@ void CountFinalize(void *contextPtr, double *val) {
 
 void FirstAppendValue(void *contextPtr, double value, __attribute__((unused)) timestamp_t ts) {
     SingleValueContext *context = (SingleValueContext *)contextPtr;
+    // 是否被重置，记录第一个插入的值
     if (context->isResetted) {
         context->isResetted = FALSE;
         context->value = value;

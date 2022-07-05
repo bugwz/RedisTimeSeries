@@ -50,22 +50,24 @@
 #define DEFAULT_DUPLICATE_POLICY        DP_BLOCK
 
 /* TS.Range Aggregation types */
+// 聚合器的枚举类型
+// TODO: 计算各种数据的公式，标准差，方差等
 typedef enum {
     TS_AGG_INVALID = -1,
     TS_AGG_NONE = 0,
-    TS_AGG_MIN,
-    TS_AGG_MAX,
-    TS_AGG_SUM,
-    TS_AGG_AVG,
-    TS_AGG_COUNT,
-    TS_AGG_FIRST,
-    TS_AGG_LAST,
-    TS_AGG_RANGE,
-    TS_AGG_STD_P,
-    TS_AGG_STD_S,
-    TS_AGG_VAR_P,
-    TS_AGG_VAR_S,
-    TS_AGG_TWA,
+    TS_AGG_MIN, // 记录最小值
+    TS_AGG_MAX, // 记录最大值
+    TS_AGG_SUM, // 记录数量
+    TS_AGG_AVG, // 记录平均值
+    TS_AGG_COUNT, // 记录数量
+    TS_AGG_FIRST, // 记录桶中时间戳最小的值
+    TS_AGG_LAST, // 记录桶中时间戳最大的值，最后一个插入的就是最大的
+    TS_AGG_RANGE, // 记录桶中最大值和最小值的差值，插入数据的时候记录最大值和最小值，统计的时候相减
+    TS_AGG_STD_P, // 记录标准差
+    TS_AGG_STD_S, // 记录标准偏差
+    TS_AGG_VAR_P, // 记录总体方差
+    TS_AGG_VAR_S, // 记录样本方差
+    TS_AGG_TWA, // 所有值的时间加权平均值（最复杂的一种方式）
     TS_AGG_TYPES_MAX // 13
 } TS_AGG_TYPES_T;
 

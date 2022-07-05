@@ -31,6 +31,7 @@ static int parseTimestamp(RedisModuleString *string, timestamp_t *out) {
 int parseLabelsFromArgs(RedisModuleString **argv, int argc, size_t *label_count, Label **labels) {
     int pos = RMUtil_ArgIndex("LABELS", argv, argc);
     int first_label_pos = pos + 1;
+    // 通过labelsResult 获取到了所有的label的k和v
     Label *labelsResult = NULL;
     *label_count = 0;
     if (pos < 0) {
@@ -58,6 +59,7 @@ int parseLabelsFromArgs(RedisModuleString **argv, int argc, size_t *label_count,
             labelsResult[i].value = RedisModule_CreateStringFromString(NULL, value);
         };
     }
+    // 将其赋值给labels
     *labels = labelsResult;
     return REDISMODULE_OK;
 }
@@ -270,6 +272,7 @@ static int _parseAlignmentTS(RedisModuleCtx *ctx,
     return TSDB_OK;
 }
 
+// 解析聚合器的相关参数
 int _parseAggregationArgs(RedisModuleCtx *ctx,
                           RedisModuleString **argv,
                           int argc,
@@ -279,8 +282,10 @@ int _parseAggregationArgs(RedisModuleCtx *ctx,
                           BucketTimestamp *bucketTS,
                           timestamp_t *alignmetTS) {
     RedisModuleString *aggTypeStr = NULL;
+    // 找到聚合器的开始的字段索引
     int offset = RMUtil_ArgIndex("AGGREGATION", argv, argc);
     if (offset > 0) {
+        // 获取聚合器类型（aggTypeStr） 和 每个桶的持续时间（temp_time_delta）
         long long temp_time_delta = 0;
         if (RMUtil_ParseArgs(argv, argc, offset + 1, "sl", &aggTypeStr, &temp_time_delta) !=
             REDISMODULE_OK) {
@@ -293,6 +298,7 @@ int _parseAggregationArgs(RedisModuleCtx *ctx,
             return TSDB_ERROR;
         }
 
+        // 校验聚合器类型的正确性，返回枚举类型
         *agg_type = RMStringLenAggTypeToEnum(aggTypeStr);
 
         if (*agg_type < 0 || *agg_type >= TS_AGG_TYPES_MAX) {
@@ -300,6 +306,7 @@ int _parseAggregationArgs(RedisModuleCtx *ctx,
             return TSDB_ERROR;
         }
 
+        // 每个桶的持续时间必须要大于0
         if (temp_time_delta <= 0) {
             RTS_ReplyGeneralError(ctx, "TSDB: bucketDuration must be greater than zero");
             return TSDB_ERROR;
@@ -307,6 +314,8 @@ int _parseAggregationArgs(RedisModuleCtx *ctx,
             *time_delta = (api_timestamp_t)temp_time_delta;
         }
 
+        // 执行ts.createrule的时候empty是一个NULL
+        // 否则的话就是在被其他命令调用
         if (empty) {
             int empty_offset = RMUtil_ArgIndex("EMPTY", argv, argc);
             if (empty_offset > 0) {
@@ -328,10 +337,14 @@ int _parseAggregationArgs(RedisModuleCtx *ctx,
             }
         }
 
+        // 执行ts.createrule的时候，alignmetTS 不是NULL，这时候应该解析对应的对齐的时间戳
+        // TODO: 怎么使用这个时间戳？？？
         if (alignmetTS) {
             _parseAlignmentTS(ctx, argv, argc, alignmetTS, offset);
         }
 
+        // 执行ts.createrule的时候，bucketTS为NULL
+        // 执行其他掉用的时候，有可能 bucketTS 不是NULL
         if (bucketTS) {
             _parseBucketTS(ctx, argv, argc, bucketTS, offset);
         }
@@ -357,6 +370,7 @@ int parseAggregationArgs(RedisModuleCtx *ctx,
                                        &aggregationArgs.bucketTS,
                                        NULL);
     if (result == TSDB_OK) {
+        // 获取聚合类型
         aggregationArgs.aggregationClass = GetAggClass(agg_type);
         if (aggregationArgs.aggregationClass == NULL) {
             RTS_ReplyGeneralError(ctx, "TSDB: Failed to retrieve aggregation class");
@@ -488,6 +502,7 @@ static int parseFilterByTimestamp(RedisModuleCtx *ctx,
                                   RedisModuleString **argv,
                                   int argc,
                                   FilterByTSArgs *args) {
+    // TODO: 按照特定的时间戳进行过滤？？？
     int offset = RMUtil_ArgIndex("FILTER_BY_TS", argv, argc);
     size_t index = 0;
     if (offset > 0) {
@@ -537,6 +552,7 @@ int parseRangeArguments(RedisModuleCtx *ctx,
     bool startTimestampMin = false;
     bool endTimestampMax = false;
     size_t start_len;
+    // 解析开始的时间戳
     const char *start = RedisModule_StringPtrLen(argv[start_index], &start_len);
     if (strcmp(start, "-") == 0) {
         args.startTimestamp = 0;
@@ -548,6 +564,7 @@ int parseRangeArguments(RedisModuleCtx *ctx,
         }
     }
 
+    // 解析结束的时间戳
     size_t end_len;
     const char *end = RedisModule_StringPtrLen(argv[start_index + 1], &end_len);
     if (strcmp(end, "+") == 0) {
@@ -560,6 +577,7 @@ int parseRangeArguments(RedisModuleCtx *ctx,
         }
     }
 
+    // 解析允许的输出的最大样本数
     args.count = -1;
     if (parseCountArgument(ctx, argv, argc, &args.count) != REDISMODULE_OK) {
         return REDISMODULE_ERR;
@@ -606,6 +624,7 @@ int parseRangeArguments(RedisModuleCtx *ctx,
     return REDISMODULE_OK;
 }
 
+// 解析传入的lables列表
 QueryPredicateList *parseLabelListFromArgs(RedisModuleCtx *ctx,
                                            RedisModuleString **argv,
                                            int start,
@@ -619,6 +638,7 @@ QueryPredicateList *parseLabelListFromArgs(RedisModuleCtx *ctx,
     int current_index = 0;
     *response = TSDB_OK;
 
+    // 解析传入的labels的参数
     for (int i = start; i < start + query_count; i++) {
         size_t label_value_pair_size;
         QueryPredicate *query = &queries->list[current_index];

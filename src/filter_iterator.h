@@ -39,8 +39,8 @@ EnrichedChunk *SeriesFilterValIterator_GetNextChunk(struct AbstractIterator *bas
 
 typedef struct AggregationIterator
 {
-    AbstractIterator base;
-    AggregationClass *aggregation;
+    AbstractIterator base; // 基础的迭代器
+    AggregationClass *aggregation; // 聚合类
     int64_t aggregationTimeDelta;
     timestamp_t timestampAlignment;
     void *aggregationContext;

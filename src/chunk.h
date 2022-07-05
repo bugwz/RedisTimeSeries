@@ -13,10 +13,10 @@
 
 typedef struct Chunk
 {
-    timestamp_t base_timestamp;
-    Sample *samples;
-    unsigned int num_samples;
-    size_t size;
+    timestamp_t base_timestamp; // 插入的第一个样本的时间戳
+    Sample *samples; // chunk中样本的信息
+    unsigned int num_samples; // chunk中样本的数量
+    size_t size; // chunk的总大小
 } Chunk;
 
 Chunk_t *Uncompressed_NewChunk(size_t size);

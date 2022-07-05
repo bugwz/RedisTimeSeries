@@ -50,7 +50,7 @@ typedef struct FilterByValueArgs
 
 typedef struct FilterByTSArgs
 {
-    bool hasValue;
+    bool hasValue; // TODO: 含义是什么？？？
     size_t count;
     timestamp_t values[MAX_TS_VALUES_FILTER];
 } FilterByTSArgs;
@@ -65,12 +65,12 @@ typedef enum RangeAlignment
 
 typedef struct RangeArgs
 {
-    api_timestamp_t startTimestamp;
-    api_timestamp_t endTimestamp;
-    long long count; // AKA limit
-    AggregationArgs aggregationArgs;
-    FilterByValueArgs filterByValueArgs;
-    FilterByTSArgs filterByTSArgs;
+    api_timestamp_t startTimestamp; // 开始的时间戳
+    api_timestamp_t endTimestamp; // 结束的时间戳
+    long long count; // AKA limit // 返回样本的最大数量
+    AggregationArgs aggregationArgs; // TODO: 聚合的对齐规则？？？
+    FilterByValueArgs filterByValueArgs; // TODO: 使用最大值，最小值过滤结果
+    FilterByTSArgs filterByTSArgs; // 
     RangeAlignment alignment;
     timestamp_t timestampAlignment;
 } RangeArgs;

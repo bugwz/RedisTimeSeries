@@ -14,6 +14,7 @@ Chunk_t *Uncompressed_NewChunk(size_t size) {
     newChunk->base_timestamp = 0;
     newChunk->num_samples = 0;
     newChunk->size = size;
+    // samples在非压缩模式下是一个数组
     newChunk->samples = (Sample *)malloc(size);
 #ifdef DEBUG
     memset(newChunk->samples, 0, size);
@@ -34,6 +35,7 @@ void Uncompressed_FreeChunk(Chunk_t *chunk) {
  * @param chunk
  * @return
  */
+// 一分为二的chunk
 Chunk_t *Uncompressed_SplitChunk(Chunk_t *chunk) {
     Chunk *curChunk = (Chunk *)chunk;
     size_t split = curChunk->num_samples / 2;
@@ -59,6 +61,7 @@ Chunk_t *Uncompressed_SplitChunk(Chunk_t *chunk) {
  * @param src: src chunk
  * @return the copied chunk
  */
+// 深拷贝
 Chunk_t *Uncompressed_CloneChunk(const Chunk_t *src) {
     const Chunk *_src = src;
     Chunk *dst = (Chunk *)malloc(sizeof(Chunk));
@@ -69,9 +72,11 @@ Chunk_t *Uncompressed_CloneChunk(const Chunk_t *src) {
 }
 
 static int IsChunkFull(Chunk *chunk) {
+    // 如果样本的数量等于 chunk的总大小除以单个样本的大小，那就代表着chunk满了
     return chunk->num_samples == chunk->size / SAMPLE_SIZE;
 }
 
+// 返回samples的数量
 u_int64_t Uncompressed_NumOfSample(Chunk_t *chunk) {
     return ((Chunk *)chunk)->num_samples;
 }
@@ -80,6 +85,7 @@ static Sample *ChunkGetSample(Chunk *chunk, int index) {
     return &chunk->samples[index];
 }
 
+// 返回最后一个插入的时间戳，就是有效数组中的最后一个元素的时间戳
 timestamp_t Uncompressed_GetLastTimestamp(Chunk_t *chunk) {
     if (unlikely(((Chunk *)chunk)->num_samples == 0)) { // empty chunks are being removed
         RedisModule_Log(mr_staticCtx, "error", "Trying to get the last timestamp of empty chunk");
@@ -87,6 +93,7 @@ timestamp_t Uncompressed_GetLastTimestamp(Chunk_t *chunk) {
     return ChunkGetSample(chunk, ((Chunk *)chunk)->num_samples - 1)->timestamp;
 }
 
+// 有效数组的最后一个元素的value
 double Uncompressed_GetLastValue(Chunk_t *chunk) {
     if (unlikely(((Chunk *)chunk)->num_samples == 0)) { // empty chunks are being removed
         RedisModule_Log(mr_staticCtx, "error", "Trying to get the last value of empty chunk");
@@ -94,6 +101,7 @@ double Uncompressed_GetLastValue(Chunk_t *chunk) {
     return ChunkGetSample(chunk, ((Chunk *)chunk)->num_samples - 1)->value;
 }
 
+// 有效数组的第一个时间戳
 timestamp_t Uncompressed_GetFirstTimestamp(Chunk_t *chunk) {
     if (((Chunk *)chunk)->num_samples == 0) {
         // When the chunk is empty it first TS is used for the chunk dict key
@@ -109,6 +117,7 @@ ChunkResult Uncompressed_AddSample(Chunk_t *chunk, Sample *sample) {
         return CR_END;
     }
 
+    // 新建的chunk，并且其中的样本数量为0
     if (Uncompressed_NumOfSample(regChunk) == 0) {
         // initialize base_timestamp
         regChunk->base_timestamp = sample->timestamp;
@@ -146,6 +155,7 @@ static void upsertChunk(Chunk *chunk, size_t idx, Sample *sample) {
  * @param size
  * @return
  */
+// TODO: 向上插入的场景是？？？
 ChunkResult Uncompressed_UpsertSample(UpsertCtx *uCtx, int *size, DuplicatePolicy duplicatePolicy) {
     *size = 0;
     Chunk *regChunk = (Chunk *)uCtx->inChunk;
@@ -184,6 +194,8 @@ size_t Uncompressed_DelRange(Chunk_t *chunk, timestamp_t startTs, timestamp_t en
     Sample *newSamples = (Sample *)malloc(regChunk->size);
     size_t i = 0;
     size_t new_count = 0;
+    // 范围删除的时候，会将不需要删除的放到一个新的chunk中
+    // 然后将老的chunk替换成新的chunk，然后free老的chunk
     for (; i < regChunk->num_samples; ++i) {
         if (regChunk->samples[i].timestamp >= startTs && regChunk->samples[i].timestamp <= endTs) {
             continue;
