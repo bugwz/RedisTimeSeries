@@ -63,11 +63,13 @@ static void swapChunks(CompressedChunk *a, CompressedChunk *b) {
 static void ensureAddSample(CompressedChunk *chunk, Sample *sample) {
     ChunkResult res = Compressed_AddSample(chunk, sample);
     if (res != CR_OK) {
+        // 如果不等于ok，那就代表着chunk的空间已经满了，此时应该对现有的空间进行重分配
         int oldsize = chunk->size;
         chunk->size += CHUNK_RESIZE_STEP;
         chunk->data = (u_int64_t *)realloc(chunk->data, chunk->size * sizeof(char));
         memset((char *)chunk->data + oldsize, 0, CHUNK_RESIZE_STEP);
         // printf("Chunk extended to %lu \n", chunk->size);
+        // 然后再次执行插入，再次插入的时候一定能够插成功，如果没成功就是异常
         res = Compressed_AddSample(chunk, sample);
         assert(res == CR_OK);
     }
@@ -78,6 +80,7 @@ static void trimChunk(CompressedChunk *chunk) {
 
     assert(excess >= 0); // else we have written beyond allocated memory
 
+    // 重新分配空间，减少不必要的内存占用
     if (excess > 1) {
         size_t newSize = chunk->size - excess + 1;
         // align to 8 bytes (u_int64_t) otherwise we will have an heap overflow in gorilla.c because
@@ -96,31 +99,38 @@ Chunk_t *Compressed_SplitChunk(Chunk_t *chunk) {
     size_t curNumSamples = curChunk->count - split;
 
     // add samples in new chunks
+    // 申请两个相同大小的chunk，将数据分别添加到两个chunk中
     size_t i = 0;
     Sample sample;
     ChunkIter_t *iter = Compressed_NewChunkIterator(curChunk);
     CompressedChunk *newChunk1 = Compressed_NewChunk(curChunk->size);
     CompressedChunk *newChunk2 = Compressed_NewChunk(curChunk->size);
+    // 将前半部分的数据添加到chunk1
     for (; i < curNumSamples; ++i) {
         Compressed_ChunkIteratorGetNext(iter, &sample);
         ensureAddSample(newChunk1, &sample);
     }
+    // 将后半部分的数据添加到chunk2
     for (; i < curChunk->count; ++i) {
         Compressed_ChunkIteratorGetNext(iter, &sample);
         ensureAddSample(newChunk2, &sample);
     }
 
+    // 由于每个chunk中的数据现在是原始数据的一半，因此需要对chunk进行数据裁剪，避免不必要的内存浪费
     trimChunk(newChunk1);
     trimChunk(newChunk2);
+
+    // 将原来的chunk替换为chunk1（其中chunk1中保留的原始chunk的前半部分的数据）
     swapChunks(curChunk, newChunk1);
 
+    // 释放迭代器，释放原始的chunk
     Compressed_FreeChunkIterator(iter);
     Compressed_FreeChunk(newChunk1);
 
     return newChunk2;
 }
 
-// 向上插入
+// 压缩样本的情况下执行向上插入
 ChunkResult Compressed_UpsertSample(UpsertCtx *uCtx, int *size, DuplicatePolicy duplicatePolicy) {
     *size = 0;
     ChunkResult rv = CR_OK;
@@ -139,25 +149,29 @@ ChunkResult Compressed_UpsertSample(UpsertCtx *uCtx, int *size, DuplicatePolicy 
     for (; i < numSamples; ++i) {
         nextRes = Compressed_ChunkIteratorGetNext(iter, &iterSample);
         // 将比ts的时间戳小的数据全部插入newChunk中
+        // 找到样本集中的第一个大于等于待插入样本时间戳的样本
         if (iterSample.timestamp >= ts) {
             break;
         }
         ensureAddSample(newChunk, &iterSample);
     }
 
-    // 如果原始数据中存在相同的时间戳数据
+    // 如果找到的样本的时间戳和待插入样本的时间戳一致
     if (ts == iterSample.timestamp) {
-        // TODO: 没看懂是什么意思？
+        // 这时候应该根据执行的重复key的策略执行
         ChunkResult cr = handleDuplicateSample(duplicatePolicy, iterSample, &uCtx->sample);
         if (cr != CR_OK) {
             Compressed_FreeChunkIterator(iter);
             Compressed_FreeChunk(newChunk);
             return CR_ERR;
         }
+
+        // 然后获取下一个
         nextRes = Compressed_ChunkIteratorGetNext(iter, &iterSample);
         *size = -1; // we skipped a sample
     }
     // upsert the sample
+    // 向上插入样本
     ensureAddSample(newChunk, &uCtx->sample);
     *size += 1;
 
@@ -168,9 +182,11 @@ ChunkResult Compressed_UpsertSample(UpsertCtx *uCtx, int *size, DuplicatePolicy 
         }
     }
 
+    // 更新老的chunk
     swapChunks(newChunk, oldChunk);
 
     Compressed_FreeChunkIterator(iter);
+    // 释放老的chunk
     Compressed_FreeChunk(newChunk);
     return rv;
 }

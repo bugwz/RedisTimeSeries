@@ -42,17 +42,21 @@ Chunk_t *Uncompressed_SplitChunk(Chunk_t *chunk) {
     size_t curNumSamples = curChunk->num_samples - split;
 
     // create chunk and copy samples
+    // 新chunk的大小是之前chunk大小的一半
     Chunk *newChunk = Uncompressed_NewChunk(split * SAMPLE_SIZE);
     for (size_t i = 0; i < split; ++i) {
+        // 截取现有chunk的后半部分，取出后半部的样本数据
         Sample *sample = &curChunk->samples[curNumSamples + i];
         Uncompressed_AddSample(newChunk, sample);
     }
 
     // update current chunk
+    // 重新分配内存的时候，直接保留前半部分的样本数据就可以
     curChunk->num_samples = curNumSamples;
     curChunk->size = curNumSamples * SAMPLE_SIZE;
     curChunk->samples = realloc(curChunk->samples, curChunk->size);
 
+    // 返回的chunk就是新创建的chunk数据，其中包含了原chunk中的一半的样本数据
     return newChunk;
 }
 
@@ -136,15 +140,22 @@ ChunkResult Uncompressed_AddSample(Chunk_t *chunk, Sample *sample) {
  * @param sample
  */
 static void upsertChunk(Chunk *chunk, size_t idx, Sample *sample) {
+    // 向上插入的时候如果当前的chunk的数量满了，但是由于我们需要在插入一个样本
+    // 因此需要扩大一下现有的样本空间
     if (chunk->num_samples == chunk->size / SAMPLE_SIZE) {
         chunk->size += sizeof(Sample);
         chunk->samples = realloc(chunk->samples, chunk->size);
     }
+
+    // 由于在非压缩模式下样本的组织方式是数组
+    // 因此在插入数据时候需要对整个数组的空间做一次move，这个也是最为耗时的地方
     if (idx < chunk->num_samples) { // sample is not last
         memmove(&chunk->samples[idx + 1],
                 &chunk->samples[idx],
                 (chunk->num_samples - idx) * sizeof(Sample));
     }
+
+    // 插入新的数据，并且将chunk中样本的数量+1
     chunk->samples[idx] = *sample;
     chunk->num_samples++;
 }
@@ -155,7 +166,8 @@ static void upsertChunk(Chunk *chunk, size_t idx, Sample *sample) {
  * @param size
  * @return
  */
-// TODO: 向上插入的场景是？？？
+// 向上插入的场景是解决了时间戳乱序的情况，但是这种情况下会大幅度影响时序操作的性能
+// 主要的性能损耗怀疑在需要对现有chunk进行拆分，需要遍历现有chunk的数据并且进行再分配
 ChunkResult Uncompressed_UpsertSample(UpsertCtx *uCtx, int *size, DuplicatePolicy duplicatePolicy) {
     *size = 0;
     Chunk *regChunk = (Chunk *)uCtx->inChunk;
@@ -166,12 +178,15 @@ ChunkResult Uncompressed_UpsertSample(UpsertCtx *uCtx, int *size, DuplicatePolic
     Sample *sample = NULL;
     for (; i < numSamples; ++i) {
         sample = ChunkGetSample(regChunk, i);
+        // 找到第一个大于等于待插入数据的样本下标
         if (ts <= sample->timestamp) {
             break;
         }
     }
     // update value in case timestamp exists
+    // 如果对应的样本不是空的，并且对应样本的时间戳等于新插入数据的时间戳
     if (sample != NULL && ts == sample->timestamp) {
+        // 我们需要按照对应的重复策略操作现有的样本数据
         ChunkResult cr = handleDuplicateSample(duplicatePolicy, *sample, &uCtx->sample);
         if (cr != CR_OK) {
             return CR_ERR;
@@ -180,6 +195,8 @@ ChunkResult Uncompressed_UpsertSample(UpsertCtx *uCtx, int *size, DuplicatePolic
         return CR_OK;
     }
 
+    // 如果i等于0的话，相当于当前chunk中的第一个时间戳就大于等于新插入的时间戳
+    // 这时候应该将整个chunk的base时间戳更新为新插入的时间戳
     if (i == 0) {
         regChunk->base_timestamp = ts;
     }

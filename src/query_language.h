@@ -69,8 +69,8 @@ typedef struct RangeArgs
     api_timestamp_t endTimestamp; // 结束的时间戳
     long long count; // AKA limit // 返回样本的最大数量
     AggregationArgs aggregationArgs; // TODO: 聚合的对齐规则？？？
-    FilterByValueArgs filterByValueArgs; // TODO: 使用最大值，最小值过滤结果
-    FilterByTSArgs filterByTSArgs; // 
+    FilterByValueArgs filterByValueArgs; // 传入的最大值最小值，后续按照这个进行过滤
+    FilterByTSArgs filterByTSArgs; // 传入的时间戳列表，后续会按照时间戳进行过滤
     RangeAlignment alignment;
     timestamp_t timestampAlignment;
 } RangeArgs;

@@ -502,7 +502,7 @@ static int parseFilterByTimestamp(RedisModuleCtx *ctx,
                                   RedisModuleString **argv,
                                   int argc,
                                   FilterByTSArgs *args) {
-    // TODO: 按照特定的时间戳进行过滤？？？
+    // 需要按照给定的时间戳进行过滤
     int offset = RMUtil_ArgIndex("FILTER_BY_TS", argv, argc);
     size_t index = 0;
     if (offset > 0) {
@@ -528,6 +528,7 @@ static int parseFilterByTimestamp(RedisModuleCtx *ctx,
         }
 
         // We sort the provided timestamps in order to improve query time filtering
+        // 我们对提供的时间戳进行排序，以改进查询时间过滤
         qsort(args->values, index, sizeof(uint64_t), comp_uint64);
         index = values_remove_duplicates(args->values, index);
 
@@ -611,10 +612,12 @@ int parseRangeArguments(RedisModuleCtx *ctx,
         }
     }
 
+    // 按最小值和最大值过滤结果
     if (parseFilterByValueArgument(ctx, argv, argc, &args.filterByValueArgs) == TSDB_ERROR) {
         return REDISMODULE_ERR;
     }
 
+    // 解析出来传入的时间戳列表，后续会按照时间戳进行过滤
     if (parseFilterByTimestamp(ctx, argv, argc, &args.filterByTSArgs) == TSDB_ERROR) {
         return REDISMODULE_ERR;
     }
@@ -824,6 +827,7 @@ int parseMRangeCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc, 
     args.queryPredicates = NULL;
     args.numLimitLabels = 0;
 
+    // 解析参数
     if (parseRangeArguments(ctx, 1, argv, argc, LLONG_MAX, &args.rangeArgs) != REDISMODULE_OK) {
         return REDISMODULE_ERR;
     }

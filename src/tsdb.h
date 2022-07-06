@@ -35,11 +35,11 @@ typedef struct Series
     RedisModuleDict *chunks;
     Chunk_t *lastChunk;
     uint64_t retentionTime; // TODO: 该值应该值得是一个时间范围，比如要保留60秒的数据，那么该值就是60
-    long long chunkSizeBytes;
+    long long chunkSizeBytes; // 每个chunk的字节大小
     short options;
     CompactionRule *rules; // 压缩规则
-    timestamp_t lastTimestamp; // TODO: 啥意思？？？
-    double lastValue;
+    timestamp_t lastTimestamp; // 上一次写入的时间戳
+    double lastValue; // 上一次写入的value
     // labels是一块连续的内存，labels使用数组来进行管理
     Label *labels; // 标签，用于二级索引，在创建ts时指定 ，可以通过ts.alter命令来修改时序中的标签信息
     RedisModuleString *keyName;

@@ -604,6 +604,8 @@ static inline void update_chunk_in_dict(RedisModuleDict *chunks,
     dictOperator(chunks, chunk, chunkFirstTSAfterOp, DICT_OP_SET);
 }
 
+// 1.4版本引入的新功能，支持乱序插入
+// TODO: 向上插入是如何实现的？？？
 int SeriesUpsertSample(Series *series,
                        api_timestamp_t timestamp,
                        double value,
@@ -614,13 +616,17 @@ int SeriesUpsertSample(Series *series,
     Chunk_t *chunk = series->lastChunk;
     timestamp_t chunkFirstTS = funcs->GetFirstTimestamp(series->lastChunk);
 
+    // 如果当前的时间戳小于当前chunk的第一个时间戳并且当前时序key的chunk的数量大于1
     if (timestamp < chunkFirstTS && RedisModule_DictSize(series->chunks) > 1) {
         // Upsert in an older chunk
+        // 向上插入一个较老的chunk
         latestChunk = false;
         timestamp_t rax_key;
+        // 将timestamp转换为raxKey
         seriesEncodeTimestamp(&rax_key, timestamp);
         RedisModuleDictIter *dictIter =
             RedisModule_DictIteratorStartC(series->chunks, "<=", &rax_key, sizeof(rax_key));
+        // 找到第一个大约等于这个时间戳的chunk
         chunkKey = RedisModule_DictNextC(dictIter, NULL, (void *)&chunk);
         if (chunkKey == NULL) {
             RedisModule_DictIteratorReseekC(dictIter, "^", NULL, 0);
@@ -630,26 +636,36 @@ int SeriesUpsertSample(Series *series,
         if (chunkKey == NULL) {
             return REDISMODULE_ERR;
         }
+
+        // 找到了要插入数据的chunk，并且获取到了对应chunk的一个时间戳
         chunkFirstTS = funcs->GetFirstTimestamp(chunk);
     }
 
     // Split chunks
+    // 拆分chunks，如果chunk中数据的纯大小大于默认chunk的大小的1.2倍
+    // TODO: 那么这里说明什么情况？？？之前扩展过？？？
     if (funcs->GetChunkSize(chunk, false) > series->chunkSizeBytes * SPLIT_FACTOR) {
         Chunk_t *newChunk = funcs->SplitChunk(chunk);
         if (newChunk == NULL) {
             return REDISMODULE_ERR;
         }
+
+        // 将新chunk加入到chunk的dict（raxTree）中
         timestamp_t newChunkFirstTS = funcs->GetFirstTimestamp(newChunk);
         dictOperator(series->chunks, newChunk, newChunkFirstTS, DICT_OP_SET);
+
+        // 如果要插入的时间戳比新的chunk的第一个时间戳大，这说明我们找都的chunk符合要求
         if (timestamp >= newChunkFirstTS) {
             chunk = newChunk;
             chunkFirstTS = newChunkFirstTS;
         }
+        // 如果当前的chunk是最后一个chunk，那么整个时序key的最后一个chunk就是新创建的chunk
         if (latestChunk) { // split of latest chunk
             series->lastChunk = newChunk;
         }
     }
 
+    // 解析来开始执行向上插入操作
     UpsertCtx uCtx = {
         .inChunk = chunk,
         .sample = { .timestamp = timestamp, .value = value },
@@ -658,6 +674,7 @@ int SeriesUpsertSample(Series *series,
     int size = 0;
 
     // Use module level configuration if key level configuration doesn't exists
+    // 如果密钥级配置不存在，则使用模块级配置
     DuplicatePolicy dp_policy;
     if (dp_override != DP_NONE) {
         dp_policy = dp_override;
@@ -667,6 +684,7 @@ int SeriesUpsertSample(Series *series,
         dp_policy = TSGlobalConfig.duplicatePolicy;
     }
 
+    // 针对于是否开启了压缩特性，内部提供了两种向上插入的方法
     ChunkResult rv = funcs->UpsertSample(&uCtx, &size, dp_policy);
     if (rv == CR_OK) {
         series->totalSamples += size;
@@ -858,8 +876,11 @@ void CompactionDelRange(Series *series, timestamp_t start_ts, timestamp_t end_ts
     }
 }
 
+// 范围删除样本数据
+// TODO: 删除的逻辑还没有看
 size_t SeriesDelRange(Series *series, timestamp_t start_ts, timestamp_t end_ts) {
     // start iterator from smallest key
+    // 从最小的key开始迭代
     RedisModuleDictIter *iter = RedisModule_DictIteratorStartC(series->chunks, "^", NULL, 0);
 
     Chunk_t *currentChunk;
@@ -922,6 +943,7 @@ size_t SeriesDelRange(Series *series, timestamp_t start_ts, timestamp_t end_ts) 
 
     RedisModule_DictIteratorStop(iter);
 
+    // 删除聚合数据中指定范围的样本数据
     CompactionDelRange(series, start_ts, end_ts);
 
     // Check if last timestamp deleted
